@@ -12,7 +12,10 @@ from uuid import uuid4
 GTZAN_CSV_PATH = "features_30_sec.csv"
 gtzan_df = pd.read_csv(GTZAN_CSV_PATH)
 
+print("CSV Filenames (first 10):", gtzan_df['filename'].head(10).tolist())
 genre_song_map= {}
+
+print("Found audio files:", os.listdir("static/audio"))
 
 for _, row in gtzan_df.iterrows():
     filename = row['filename']
@@ -87,7 +90,9 @@ def login():
 @app.route('/recommend', methods=['POST'])
 def recommend():
     data = request.get_json()
+    print("Raw JSON received:", data)
     text_input = data.get('text', '').lower()
+    print("Mood input received :", text_input)
 
     mood_to_genre ={
         "sad" :"blues",
@@ -100,10 +105,17 @@ def recommend():
     }
 
     matched_genre = next((g for m, g in mood_to_genre.items() if m in text_input), "pop")
+    print("matched_genre: ", matched_genre)
 
     genre_songs = genre_song_map.get(matched_genre, [])
-    songs = random.sample(genre_songs, k=min(5, len(genre_songs)))
+    print(f" Songs available for genre '{matched_genre}':", len(genre_songs))
 
+    if genre_songs:
+        songs = random.sample(genre_songs, k=min(5, len(genre_songs)))
+    else:
+        songs = []
+
+    print(" Songs being sent to frontend:", [song['title'] for song in songs])
     return jsonify({"songs":songs}), 200
 
 @app.route('/playlist', methods=['POST'])
