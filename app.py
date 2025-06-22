@@ -1,38 +1,11 @@
 from flask import Flask, request, jsonify
-from flask_sqlalchemy import SQLAlchemy
+from flask_sqlalchemy import SQLAlchemy # type: ignore
 from flask_cors import CORS
 from werkzeug.security import generate_password_hash, check_password_hash
 from sqlalchemy.dialects.sqlite import JSON
-import os
 import json
-import pandas as pd
-import random
 from uuid import uuid4
-
-GTZAN_CSV_PATH = "features_30_sec.csv"
-gtzan_df = pd.read_csv(GTZAN_CSV_PATH)
-
-print("CSV Filenames (first 10):", gtzan_df['filename'].head(10).tolist())
-genre_song_map= {}
-
-print("Found audio files:", os.listdir("static/audio"))
-
-for _, row in gtzan_df.iterrows():
-    filename = row['filename']
-    genre = row['label']
-    audio_path = f"static/audio/{filename}"
-
-    if not os.path.isfile(audio_path):
-        continue
-
-    if genre not in genre_song_map:
-        genre_song_map[genre] =[]
-
-    genre_song_map[genre].append({
-        "title": filename,
-        "artist": "Unknown",
-        "url": f"http://127.0.0.1:5000/static/audio/{filename}"
-    })
+import requests
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})
@@ -53,6 +26,13 @@ class Playlist(db.Model):
     name= db.Column(db.String(120), nullable=False)
     songs= db.Column(db.Text, nullable=False)
     share_id = db.Column(db.String(100), unique = True)
+
+class LikedSong(db.Model):
+    id = db.Column(db.Integer, primary_key = True)
+    username = db.Column(db.String(80), nullable = False)
+    title = db.Column(db.String(120), nullable = False)
+    artist = db.Column(db.String(120), default="Unknown")
+    url = db.Column(db.String(255), nullable = False)
 
 
 
@@ -94,29 +74,28 @@ def recommend():
     text_input = data.get('text', '').lower()
     print("Mood input received :", text_input)
 
-    mood_to_genre ={
-        "sad" :"blues",
-        "happy" : "pop",
-        "angry" : "metal",
-        "chill": "jazz",
-        "focus": "classical",
-        "party": "disco",
-        "hype": "rock"
-    }
+    if not text_input:
+        return jsonify({'message' : 'No text input provided'}), 400
 
-    matched_genre = next((g for m, g in mood_to_genre.items() if m in text_input), "pop")
-    print("matched_genre: ", matched_genre)
+    try:
+        response = requests.post(
+            "http://localhost:5000/find_similar_audio",
+            json ={"text": text_input}
+        )
 
-    genre_songs = genre_song_map.get(matched_genre, [])
-    print(f" Songs available for genre '{matched_genre}':", len(genre_songs))
+        ai_results = response.json().get("results", [])
 
-    if genre_songs:
-        songs = random.sample(genre_songs, k=min(5, len(genre_songs)))
-    else:
         songs = []
-
-    print(" Songs being sent to frontend:", [song['title'] for song in songs])
-    return jsonify({"songs":songs}), 200
+        for r in ai_results:
+            songs.append({
+                "title" : r["filename"],
+                "artist": "Unknown",
+                "url": r["full_path"]
+            })
+        return jsonify({"songs":songs}), 200
+    
+    except Exception as e:
+        return jsonify({'message': 'Error calling AI API', 'error' : str(e)}), 500
 
 @app.route('/playlist', methods=['POST'])
 def save_playlist():
@@ -204,10 +183,41 @@ def get_shared_playlist(share_id):
         'share_id': playlist.share_id
     }), 200
 
+@app.route('/like', methods=['POST'])
+def like_song():
+    data = request.get_json()
+    username = data.get('username')
+    title = data.get('title')
+    artist = data.get('artist', 'Unknown')
+    url = data.get('url')
+
+    if not username or not title or not url:
+        return jsonify({'message' : 'Missing fields'}), 400
+    
+    liked = LikedSong(username=username, title=title, artist=artist, url=url)
+    db.session.add(liked)
+    db.session.commit()
+    return jsonify({'message' : 'Song liked!'}), 201
+
+@app.route('/likes', methods =['GET'])
+def get_likes():
+    username = request.args.get('username')
+    if not username:
+        return jsonify({'message' : 'Username is required'}), 400
+    
+    liked = LikedSong.query.filter_by(username=username).all()
+    result=[{
+        'title': song.title,
+        'artist': songs.artist,
+        'url': song.url
+    } for song in liked]
+
+    return jsonify(result), 200
+
 
 if __name__ =='__main__':
     with app.app_context():
         db.create_all()
-    app.run(debug=True)
+    app.run(debug=True, port=5001)
 
 
